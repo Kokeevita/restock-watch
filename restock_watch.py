@@ -5,8 +5,11 @@
   python3 -I restock_watch.py [--dir 폴더] [--base https://campingmoon.co.kr] [--opts auto|yes|no] [--opt-hours 9,12,15,18]
 
   --dir        state/·docs/가 있는 폴더(기본: 이 파일이 있는 폴더)
-  --opts       옵션 상태(상세 화면) 읽기. auto = --opt-hours 시각과 상품 단위 재입고가 생긴 상품만 / yes = 판매 중 옵션 상품 전부 / no = 안 읽음
+  --opts       옵션 상태(상세 화면) 읽기. auto = --opt-hours 칸(9~11·12~14·15~17·18~20시)마다 그 칸에서 처음 도는 실행이
+               판매 중 옵션 상품을 다 읽고, 그 밖에는 상품 단위 재입고가 생긴 상품만 / yes = 판매 중 옵션 상품 전부 / no = 안 읽음
+               (GitHub 정시 실행은 수십 분 늦게 돌 때가 많다 — 11/10 밤 7·48·51분. 정해진 '시각'으로 하면 그 시각을 건너뛸 수 있어 '칸'으로 한다)
   --only       시험용. 상세를 읽을 상품을 이 번호들로 좁힌다(예: --only 949,4305)
+  --now        시험용. 지금 시각을 바꾼다(예: --now 2026-11-11T10:13+09:00)
 
 남기는 것
   state/snapshot.json  지난번 상태(상품: 판매·품절·단종, 옵션 상품: 옵션마다 살 수 있음 여부)
@@ -119,6 +122,14 @@ def options_of(base, no):
     return out
 
 
+def opt_slot(t, hours):
+    """옵션 전체 읽기 칸. 각 시각부터 다음 시각 전까지(마지막 시각은 3시간), 칸 밖이면 None. 예: 9·12·15·18 → 10:13은 '날짜 09'"""
+    hs = sorted(hours)
+    if not hs or t.hour < hs[0] or t.hour >= hs[-1] + 3:
+        return None
+    return '%s %02d' % (t.date().isoformat(), max(h for h in hs if h <= t.hour))
+
+
 def load(path, default):
     try:
         with open(path, encoding='utf-8') as f:
@@ -143,7 +154,8 @@ def main():
     sp, hp, op, lp = (os.path.join(root, 'state', 'snapshot.json'), os.path.join(root, 'state', 'history.json'),
                       os.path.join(root, 'docs', 'restock.json'), os.path.join(root, 'state', 'log.txt'))
     t0 = time.time()
-    now = datetime.datetime.now(KST)
+    now = datetime.datetime.fromisoformat(arg('--now')) if arg('--now') else datetime.datetime.now(KST)   # --now: 시험용
+    now = (now if now.tzinfo else now.replace(tzinfo=KST)).astimezone(KST)
     stamp = now.isoformat(timespec='minutes')
     prev = load(sp, None)
     hist = load(hp, {})
@@ -178,7 +190,10 @@ def main():
         if p and 'o' in p:
             c['o'] = p['o']
     back_whole = [no for no, c in cur.items() if c['s'] == '판매' and pprods.get(no, {}).get('s') == '품절']
-    if mode == 'yes' or (mode == 'auto' and now.hour in opt_hours):
+    slot = opt_slot(now, opt_hours)
+    done_slot = (prev or {}).get('opt_slot')   # 옵션 전체 읽기를 마친 마지막 칸
+    full = mode == 'yes' or (mode == 'auto' and slot is not None and slot != done_slot)
+    if full:
         targets = [no for no, c in cur.items() if c['s'] == '판매' and (c.get('o') is None or len(c['o']) > 0)]
     elif mode == 'auto':
         targets = list(back_whole)
@@ -197,6 +212,8 @@ def main():
             cur[no]['o'] = o
             fresh.add(no)
         time.sleep(0.3)
+    if full and slot and not only and failed <= len(targets) // 10:
+        done_slot = slot   # 이 칸은 끝 — 같은 칸의 다음 실행은 다시 다 읽지 않는다(많이 못 읽었으면 다음 실행이 다시 한다)
 
     # 3) 비교
     events = []
@@ -235,15 +252,15 @@ def main():
         items.append({'p': e['p'], 't': e['t'], 'k': e['k'], 'o': o, 'n': c['n']})
     items.sort(key=lambda x: (x['t'], x['p']), reverse=True)
 
-    save(sp, {'taken': stamp, 'base': base, 'products': {str(k): v for k, v in sorted(cur.items())}})
+    save(sp, {'taken': stamp, 'base': base, 'opt_slot': done_slot, 'products': {str(k): v for k, v in sorted(cur.items())}})
     save(hp, hist)
     save(op, {'updated': stamp, 'badge_days': BADGE_DAYS, 'keep_days': KEEP_DAYS, 'items': items})
     s = sum(1 for v in cur.values() if v['s'] == '판매')
     q = sum(1 for v in cur.values() if v['s'] == '품절')
     d = sum(1 for v in cur.values() if v['s'] == '단종')
-    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s · 새 재입고 %d · 결과 %d · %.1f분' % (
+    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · %.1f분' % (
         '' if prev else '기준점 · ', len(cur), s, q, d, len(fresh), len(targets), (' (못 읽음 %d)' % failed) if failed else '',
-        len(events), len(items), (time.time() - t0) / 60))
+        (' (옵션 전체 %s시 칸)' % slot[-2:]) if full and slot else '', len(events), len(items), (time.time() - t0) / 60))
     for e in events:
         print('  재입고', e['p'], e['n'][:30], ('옵션: ' + ', '.join(e['o'])) if e['o'] else '')
     return 0
