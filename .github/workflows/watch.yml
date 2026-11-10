@@ -1,12 +1,12 @@
 # 재입고 감시 — GitHub 무료 자동 실행(준비만 해 둔 파일. GitHub 저장소에 올린 뒤에 돈다)
-# 한국 시각 08:05~20:05 매시(UTC 23시~11시). 상세(옵션) 읽기는 9·12·15·18시와 상품 단위 재입고가 생긴 상품만.
+# 한국 시각 08:23~20:23 매시(UTC 23시~11시). 정각 무렵은 GitHub 실행이 몰려 늦거나 건너뛰어(11/10 19:05 첫 정시 실행 안 돎) 23분으로 옮김. 상세(옵션) 읽기는 9·12·15·18시와 상품 단위 재입고가 생긴 상품만.
 name: restock-watch
 on:
   push:   # 프로그램을 고쳐 올리면 한 번 바로 돈다(자동 실행이 남기는 기록 저장은 다시 돌리지 않는다)
     branches: [main]
     paths: ['restock_watch.py', '.github/workflows/watch.yml']
   schedule:
-    - cron: '5 23,0-11 * * *'
+    - cron: '23 23,0-11 * * *'
   workflow_dispatch: {}
 permissions:
   contents: write
