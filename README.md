@@ -14,7 +14,7 @@
 | `state/history.json` | 재입고 기록(30일) |
 | `state/log.txt` | 실행할 때마다 한 줄 |
 | `docs/restock.json` | 스킨이 읽는 결과. 지금 살 수 있는 재입고만, 최신순 |
-| `.github/workflows/watch.yml` | GitHub 무료 자동 실행(한국 시각 08:23~20:23 매시) |
+| `.github/workflows/watch.yml` | GitHub 무료 자동 실행(하루 종일 매시 23분) |
 
 ## 결과 파일 주소(스킨이 읽는 곳)
 
