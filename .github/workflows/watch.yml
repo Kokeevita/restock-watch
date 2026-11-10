@@ -26,5 +26,6 @@ jobs:
           git config user.name 'restock-watch'
           git config user.email 'restock-watch@users.noreply.github.com'
           git add state docs
-          git commit -m "감시 $(TZ=Asia/Seoul date +%F_%H%M)" || echo '바뀐 것 없음'
+          git commit -m "감시 $(TZ=Asia/Seoul date +%F_%H%M)" || exit 0
+          git pull --rebase -q origin main
           git push

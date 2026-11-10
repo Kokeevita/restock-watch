@@ -16,6 +16,10 @@
 | `docs/restock.json` | 스킨이 읽는 결과. 지금 살 수 있는 재입고만, 최신순 |
 | `.github/workflows/watch.yml` | GitHub 무료 자동 실행(한국 시각 08~20시 매시) |
 
+## 결과 파일 주소(스킨이 읽는 곳)
+
+`https://raw.githubusercontent.com/Kokeevita/restock-watch/main/docs/restock.json` — 누구나 읽을 수 있고, 바뀐 내용은 5분 안에 반영된다.
+
 ## 결과 파일 모양
 
 ```json
