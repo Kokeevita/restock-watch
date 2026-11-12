@@ -16,6 +16,8 @@
   state/history.json   재입고 기록(30일)
   state/log.txt        실행 한 줄 기록
   docs/restock.json    스킨이 읽는 결과 — 지금 살 수 있는 재입고만, 최신순
+  state/soldout.json   품절 시각 — 상품마다 '판매 → 품절'로 바뀐 때(감시 전부터 품절이던 상품은 before = 날짜 모름)
+  docs/soldout.json    스킨이 읽는 품절 날짜 — 지금 품절인 상품만. items(날짜 아는 것, 최신순) + before(날짜 모름)
 
 재입고로 치는 것: 지난번 품절 → 이번 판매(상품 단위), 지난번 살 수 없던 옵션 → 이번 살 수 있음(옵션 단위)
 치지 않는 것: 새 상품, 단종, 숨김→보임, 소량→넉넉. 다시 품절이 되면 결과에서 빠진다.
@@ -153,6 +155,7 @@ def main():
     opt_hours = {int(x) for x in arg('--opt-hours', '9,12,15,18').split(',') if x.strip()}
     sp, hp, op, lp = (os.path.join(root, 'state', 'snapshot.json'), os.path.join(root, 'state', 'history.json'),
                       os.path.join(root, 'docs', 'restock.json'), os.path.join(root, 'state', 'log.txt'))
+    qp, qo = os.path.join(root, 'state', 'soldout.json'), os.path.join(root, 'docs', 'soldout.json')
     t0 = time.time()
     now = datetime.datetime.fromisoformat(arg('--now')) if arg('--now') else datetime.datetime.now(KST)   # --now: 시험용
     now = (now if now.tzinfo else now.replace(tzinfo=KST)).astimezone(KST)
@@ -252,15 +255,39 @@ def main():
         items.append({'p': e['p'], 't': e['t'], 'k': e['k'], 'o': o, 'n': c['n']})
     items.sort(key=lambda x: (x['t'], x['p']), reverse=True)
 
+    # 5) 품절 시각(11/12 사업자 요청 "최근 품절이 먼저 보이게"): 상품 단위로 '판매 → 품절'이 된 때를 적는다
+    #    감시 전부터 품절이던 상품은 'before'(날짜 모름). 다시 판매·단종이 되면 지운다. 목록에서 잠깐 빠진 상품의 기록은 그대로 둔다
+    sq = load(qp, None)
+    if not isinstance(sq, dict) or not isinstance(sq.get('since'), dict):
+        sq = {'start': (prev or {}).get('taken') or stamp, 'since': {}}
+    since, new_q = sq['since'], 0
+    for no, c in cur.items():
+        k = str(no)
+        if c['s'] != '품절':
+            since.pop(k, None)
+        elif k not in since:
+            p = pprods.get(no)
+            if not prev or (p and p['s'] == '품절'):
+                since[k] = 'before'   # 첫 실행이거나, 지난번에도 품절인데 기록이 없으면 날짜를 모르는 것으로
+            else:
+                since[k] = stamp      # 지난번 판매(또는 새로 보인 상품·단종에서 돌아옴) → 이번에 품절
+                new_q += 1
+    sold_now = [no for no, c in cur.items() if c['s'] == '품절']
+    q_items = sorted(({'p': no, 't': since[str(no)]} for no in sold_now if since[str(no)] != 'before'), key=lambda x: (x['t'], x['p']), reverse=True)
+    q_before = sorted((no for no in sold_now if since[str(no)] == 'before'), reverse=True)
+
     save(sp, {'taken': stamp, 'base': base, 'opt_slot': done_slot, 'products': {str(k): v for k, v in sorted(cur.items())}})
     save(hp, hist)
     save(op, {'updated': stamp, 'badge_days': BADGE_DAYS, 'keep_days': KEEP_DAYS, 'items': items})
+    save(qp, sq)
+    save(qo, {'updated': stamp, 'start': sq['start'], 'items': q_items, 'before': q_before})
     s = sum(1 for v in cur.values() if v['s'] == '판매')
     q = sum(1 for v in cur.values() if v['s'] == '품절')
     d = sum(1 for v in cur.values() if v['s'] == '단종')
-    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · %.1f분' % (
+    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · 새 품절 %d(날짜 앎 %d·모름 %d) · %.1f분' % (
         '' if prev else '기준점 · ', len(cur), s, q, d, len(fresh), len(targets), (' (못 읽음 %d)' % failed) if failed else '',
-        (' (옵션 전체 %s시 칸)' % slot[-2:]) if full and slot else '', len(events), len(items), (time.time() - t0) / 60))
+        (' (옵션 전체 %s시 칸)' % slot[-2:]) if full and slot else '', len(events), len(items),
+        new_q, len(q_items), len(q_before), (time.time() - t0) / 60))
     for e in events:
         print('  재입고', e['p'], e['n'][:30], ('옵션: ' + ', '.join(e['o'])) if e['o'] else '')
     return 0
