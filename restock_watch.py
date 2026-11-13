@@ -35,6 +35,7 @@ import urllib.request
 KST = datetime.timezone(datetime.timedelta(hours=9))
 UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
 KEEP_DAYS, BADGE_DAYS = 30, 14
+SPECIAL_CATES = [200]   # 특가 분류 번호(카페24에 만든 뒤 넣는다, 11/13). 특가 분류에만 넣고 전체상품(152)에 빠뜨린 상품도 품절·재입고를 감시한다
 PAY = {4087, 4225, 4247, 4453, 4454, 4470}   # 개인결제창
 MIN_RATIO = 0.9                               # 목록이 지난번의 90%보다 적게 읽히면 이번 실행은 버린다
 
@@ -172,6 +173,9 @@ def main():
     # 1) 상품 단위 상태: 전체상품(152) + 단종(183)
     try:
         cur = crawl(base, 152, 5)
+        for sc in SPECIAL_CATES:   # 전체상품에 이미 있으면 그대로(같은 상품을 두 번 세지 않는다)
+            for no, e in crawl(base, sc).items():
+                cur.setdefault(no, e)
         ended = crawl(base, 183)
     except Exception as e:
         log('목록을 못 읽어 이번 실행은 버림: %s' % e)
