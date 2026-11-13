@@ -305,10 +305,10 @@ def main():
     s = sum(1 for v in cur.values() if v['s'] == '판매')
     q = sum(1 for v in cur.values() if v['s'] == '품절')
     d = sum(1 for v in cur.values() if v['s'] == '단종')
-    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · 새 품절 %d(날짜 앎 %d·모름 %d) · %.1f분' % (
+    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · 새 품절 %d(날짜 앎 %d·모름 %d) · 배송비 예외 %d · %.1f분' % (
         '' if prev else '기준점 · ', len(cur), s, q, d, len(fresh), len(targets), (' (못 읽음 %d)' % failed) if failed else '',
         (' (옵션 전체 %s시 칸)' % slot[-2:]) if full and slot else '', len(events), len(items),
-        new_q, len(q_items), len(q_before), (time.time() - t0) / 60))
+        new_q, len(q_items), len(q_before), len(ship_items), (time.time() - t0) / 60))
     for e in events:
         print('  재입고', e['p'], e['n'][:30], ('옵션: ' + ', '.join(e['o'])) if e['o'] else '')
     return 0
