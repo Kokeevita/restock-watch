@@ -18,11 +18,14 @@
   docs/restock.json    스킨이 읽는 결과 — 지금 살 수 있는 재입고만, 최신순
   state/soldout.json   품절 시각 — 상품마다 '판매 → 품절'로 바뀐 때(감시 전부터 품절이던 상품은 before = 날짜 모름)
   docs/soldout.json    스킨이 읽는 품절 날짜 — 지금 품절인 상품만. items(날짜 아는 것, 최신순) + before(날짜 모름)
+  docs/shipfee.json    스킨이 읽는 배송비 예외 — 목록 카드 '배송비' 글이 가장 흔한 값(common, 몰 기본)과 다른 상품만 {상품번호: 글}.
+                       휴대폰 카드는 배송비 칸이 없어 무료배송 표시를 이것으로 판단한다(11/13). 상태 파일에는 넣지 않는다
 
 재입고로 치는 것: 지난번 품절 → 이번 판매(상품 단위), 지난번 살 수 없던 옵션 → 이번 살 수 있음(옵션 단위)
 치지 않는 것: 새 상품, 단종, 숨김→보임, 소량→넉넉. 다시 품절이 되면 결과에서 빠진다.
 읽기만 한다(로그인·저장·장바구니 없음).
 """
+import collections
 import datetime
 import html
 import json
@@ -61,6 +64,11 @@ def get(url, tries=3):
 
 
 CARD = re.compile(r'<li data-no="(\d+)"[^>]*class="v3-card[^"]*">(.*?)</li>\s*(?=<li data-no|</ul>)', re.S)
+ITEM = re.compile(r'<li class="([^"]*)">\s*<span class="k">(.*?)</span>\s*<span class="v">(.*?)</span>', re.S)
+
+
+def plain(s):
+    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', s))).strip()
 
 
 def parse_feed(page):
@@ -70,7 +78,9 @@ def parse_feed(page):
         nm = re.search(r'class="nm"[^>]*>(.*?)</a>', c, re.S)
         name = html.unescape(re.sub(r'<[^>]+>', '', nm.group(1))).strip() if nm else ''
         sold = bool(re.search(r'class="soldsrc">\s*<img', c))
-        out[no] = {'n': name, 's': '품절' if sold else '판매'}
+        # 목록 표시 항목 '배송비'(카페24 상품정보 표시설정에서 켬, 11/13). 숨은 칸(displaynone)은 보지 않는다
+        fee = next((plain(v) for cls, k, v in ITEM.findall(c) if 'displaynone' not in cls and plain(k).rstrip(' :') == '배송비'), '')
+        out[no] = {'n': name, 's': '품절' if sold else '판매', 'f': fee}
     return out
 
 
@@ -157,6 +167,7 @@ def main():
     sp, hp, op, lp = (os.path.join(root, 'state', 'snapshot.json'), os.path.join(root, 'state', 'history.json'),
                       os.path.join(root, 'docs', 'restock.json'), os.path.join(root, 'state', 'log.txt'))
     qp, qo = os.path.join(root, 'state', 'soldout.json'), os.path.join(root, 'docs', 'soldout.json')
+    fo = os.path.join(root, 'docs', 'shipfee.json')
     t0 = time.time()
     now = datetime.datetime.fromisoformat(arg('--now')) if arg('--now') else datetime.datetime.now(KST)   # --now: 시험용
     now = (now if now.tzinfo else now.replace(tzinfo=KST)).astimezone(KST)
@@ -180,6 +191,7 @@ def main():
     except Exception as e:
         log('목록을 못 읽어 이번 실행은 버림: %s' % e)
         return 1
+    fees = {no: e.pop('f', '') for no, e in cur.items()}   # 배송비 글은 상태 파일에 넣지 않고 shipfee.json으로만 낸다
     for no, e in ended.items():
         cur[no] = {'n': e['n'], 's': '단종'}
     for no in list(cur):
@@ -285,6 +297,11 @@ def main():
     save(op, {'updated': stamp, 'badge_days': BADGE_DAYS, 'keep_days': KEEP_DAYS, 'items': items})
     save(qp, sq)
     save(qo, {'updated': stamp, 'start': sq['start'], 'items': q_items, 'before': q_before})
+    # 6) 배송비 예외(11/13): 가장 흔한 글(몰 기본)과 다른 상품만. 단종 · 개인결제창은 뺀다. 글이 하나도 없으면(항목을 끄면) 빈 목록
+    sell = [no for no, c in cur.items() if c['s'] != '단종' and fees.get(no)]
+    common = collections.Counter(fees[no] for no in sell).most_common(1)[0][0] if sell else ''
+    ship_items = {str(no): fees[no] for no in sorted(sell) if fees[no] != common}
+    save(fo, {'updated': stamp, 'common': common, 'items': ship_items})
     s = sum(1 for v in cur.values() if v['s'] == '판매')
     q = sum(1 for v in cur.values() if v['s'] == '품절')
     d = sum(1 for v in cur.values() if v['s'] == '단종')
