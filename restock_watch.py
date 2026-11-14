@@ -20,6 +20,11 @@
   docs/soldout.json    스킨이 읽는 품절 날짜 — 지금 품절인 상품만. items(날짜 아는 것, 최신순) + before(날짜 모름)
   docs/shipfee.json    스킨이 읽는 배송비 예외 — 목록 카드 '배송비' 글이 가장 흔한 값(common, 몰 기본)과 다른 상품만 {상품번호: 글}.
                        휴대폰 카드는 배송비 칸이 없어 무료배송 표시를 이것으로 판단한다(11/13). 상태 파일에는 넣지 않는다
+  state/skip.json      목록을 못 읽어 버린 실행이 몇 번 이어졌는지(정상 실행에서 지운다). 한두 번은 정상으로 끝내 기록만 남기고,
+                       3번째(FAIL_ALERT)부터 실패로 끝내 GitHub 실패 메일이 가게 한다(11/14 사용자: 한 번 실패는 치명적이지 않다)
+
+GitHub에서 돌 때는 시작하면서 저장소의 최신 커밋으로 옮긴다(이 실행이 시작한 커밋 뒤에 다른 실행이 기록을 올렸을 때).
+옛 기록으로 계산하면 '결과 저장'(git pull --rebase)에서 부딪혀 실패하기 때문이다(11/13 프로그램을 올린 실행).
 
 재입고로 치는 것: 지난번 품절 → 이번 판매(상품 단위), 지난번 살 수 없던 옵션 → 이번 살 수 있음(옵션 단위)
 치지 않는 것: 새 상품, 단종, 숨김→보임, 소량→넉넉. 다시 품절이 되면 결과에서 빠진다.
@@ -31,6 +36,7 @@ import html
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.request
@@ -41,6 +47,7 @@ KEEP_DAYS, BADGE_DAYS = 30, 14
 SPECIAL_CATES = [200]   # 특가 분류 번호(카페24에 만든 뒤 넣는다, 11/13). 특가 분류에만 넣고 전체상품(152)에 빠뜨린 상품도 품절·재입고를 감시한다
 PAY = {4087, 4225, 4247, 4453, 4454, 4470}   # 개인결제창
 MIN_RATIO = 0.9                               # 목록이 지난번의 90%보다 적게 읽히면 이번 실행은 버린다
+FAIL_ALERT = 3                                # 버린 실행이 이만큼 이어질 때만 실패로 끝낸다(GitHub 실패 메일, 11/14)
 
 
 def arg(name, default=None):
@@ -159,8 +166,32 @@ def save(path, obj):
     os.replace(tmp, path)
 
 
+
+def sync_latest(root):
+    """GitHub에서 돌 때만: 이 실행이 시작한 커밋 뒤에 다른 실행이 기록을 더 올렸으면 그 최신 커밋으로 옮긴다.
+    옮기지 못하면(받기 실패 · 이어지지 않는 커밋 · 고친 파일 있음) 그대로 한다 — 예전과 같다. 옮긴 커밋 앞 7자리 또는 ''를 돌려준다"""
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        return ''
+
+    def git(*a):
+        return subprocess.run(['git', '-C', root] + list(a), capture_output=True, text=True, timeout=120)
+    try:
+        if git('fetch', '-q', '--depth=50', 'origin', 'main').returncode:
+            return ''
+        head = git('rev-parse', 'HEAD').stdout.strip()
+        latest = git('rev-parse', 'FETCH_HEAD').stdout.strip()
+        if not latest or head == latest or git('merge-base', '--is-ancestor', 'HEAD', 'FETCH_HEAD').returncode:
+            return ''
+        if git('status', '--porcelain', '--untracked-files=no').stdout.strip():
+            return ''
+        return latest[:7] if git('reset', '-q', '--hard', 'FETCH_HEAD').returncode == 0 else ''
+    except Exception:
+        return ''
+
+
 def main():
     root = arg('--dir', os.path.dirname(os.path.abspath(__file__)))
+    synced = sync_latest(root)   # 기록을 읽기 전에
     base = arg('--base', 'https://campingmoon.co.kr').rstrip('/')
     mode = arg('--opts', 'auto')
     opt_hours = {int(x) for x in arg('--opt-hours', '9,12,15,18').split(',') if x.strip()}
@@ -181,6 +212,17 @@ def main():
             f.write('%s %s\n' % (stamp, msg))
         print(msg)
 
+    kp = os.path.join(root, 'state', 'skip.json')
+
+    def skip(msg):
+        """이번 실행을 버린다(결과 · 상태는 그대로). FAIL_ALERT번째로 이어질 때부터만 실패로 끝낸다"""
+        k = load(kp, None) or {}
+        n = int(k.get('n', 0)) + 1
+        save(kp, {'n': n, 'first': k.get('first') or stamp, 'last': stamp, 'why': msg[:200]})
+        alert = n >= FAIL_ALERT
+        log('%s — 버림 %d번째 연속%s' % (msg, n, ' → 실패로 끝냄(GitHub 메일)' if alert else ''))
+        return 1 if alert else 0
+
     # 1) 상품 단위 상태: 전체상품(152) + 단종(183)
     try:
         cur = crawl(base, 152, 5)
@@ -189,8 +231,7 @@ def main():
                 cur.setdefault(no, e)
         ended = crawl(base, 183)
     except Exception as e:
-        log('목록을 못 읽어 이번 실행은 버림: %s' % e)
-        return 1
+        return skip('목록을 못 읽어 이번 실행은 버림: %s' % e)
     fees = {no: e.pop('f', '') for no, e in cur.items()}   # 배송비 글은 상태 파일에 넣지 않고 shipfee.json으로만 낸다
     for no, e in ended.items():
         cur[no] = {'n': e['n'], 's': '단종'}
@@ -200,8 +241,7 @@ def main():
     pprods = {int(k): v for k, v in (prev or {}).get('products', {}).items()}
     live = lambda d: sum(1 for v in d.values() if v['s'] != '단종')
     if pprods and live(cur) < MIN_RATIO * live(pprods):
-        log('목록이 지난번(%d)보다 너무 적게(%d) 읽혀 이번 실행은 버림' % (live(pprods), live(cur)))
-        return 1
+        return skip('목록이 지난번(%d)보다 너무 적게(%d) 읽혀 이번 실행은 버림' % (live(pprods), live(cur)))
 
     # 2) 옵션 상태: 지난번 것을 이어받고, 필요한 상품만 상세를 다시 읽는다
     for no, c in cur.items():
@@ -302,13 +342,17 @@ def main():
     common = collections.Counter(fees[no] for no in sell).most_common(1)[0][0] if sell else ''
     ship_items = {str(no): fees[no] for no in sorted(sell) if fees[no] != common}
     save(fo, {'updated': stamp, 'common': common, 'items': ship_items})
+    skipped = load(kp, None)   # 앞서 버린 실행이 있었으면 지우고 줄에 남긴다
+    if skipped is not None:
+        os.remove(kp)
     s = sum(1 for v in cur.values() if v['s'] == '판매')
     q = sum(1 for v in cur.values() if v['s'] == '품절')
     d = sum(1 for v in cur.values() if v['s'] == '단종')
-    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · 새 품절 %d(날짜 앎 %d·모름 %d) · 배송비 예외 %d · %.1f분' % (
+    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · 새 품절 %d(날짜 앎 %d·모름 %d) · 배송비 예외 %d · %.1f분%s%s' % (
         '' if prev else '기준점 · ', len(cur), s, q, d, len(fresh), len(targets), (' (못 읽음 %d)' % failed) if failed else '',
         (' (옵션 전체 %s시 칸)' % slot[-2:]) if full and slot else '', len(events), len(items),
-        new_q, len(q_items), len(q_before), len(ship_items), (time.time() - t0) / 60))
+        new_q, len(q_items), len(q_before), len(ship_items), (time.time() - t0) / 60,
+        (' · 앞서 버림 %d번 뒤 정상' % int(skipped.get('n', 0))) if skipped else '', (' · 최신 기록 %s에서 시작' % synced) if synced else ''))
     for e in events:
         print('  재입고', e['p'], e['n'][:30], ('옵션: ' + ', '.join(e['o'])) if e['o'] else '')
     return 0
