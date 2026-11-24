@@ -438,6 +438,8 @@ def special_run(root, base, stamp, now, lst, sp, log):
     basep = state.get('base') or {}
     g = Guest(base)
     obs = special_observe(g, lst, sp)
+    if obs['errs'] and not obs['items']:
+        raise RuntimeError('판매 중 특가를 하나도 못 읽음(%s)' % ','.join(map(str, obs['errs'])))
     keep, once, info, nb = special_findings(obs, basep, stamp)
     fresh = [k for k in keep if k not in (state.get('alerts') or {})]
     rechecked = ''
@@ -453,6 +455,7 @@ def special_run(root, base, stamp, now, lst, sp, log):
     mail, lines = special_alerts(keep, once, state, set(obs['errs']), stamp, now)
     state['base'] = nb
     state['checked'] = stamp
+    state.pop('fail', None)   # 검사를 해냈으면 '못 함' 이어짐을 지운다
     save(path, state)
     log('특가 %d개 · 품목 %d · 경보 %d(새 %d · 계속 %d · 바뀜 %d · 해소 %d)%s%s%s' % (
         len(obs['sp']), len(obs['items']), len(state.get('alerts') or {}),
@@ -647,8 +650,16 @@ def main():
     slist = {no: {'n': c['n'], 's': c['s'], 'pr': prices.get(no, (0, 0))[0], 'dc': prices.get(no, (0, 0))[1]} for no, c in cur.items()}
     try:
         rc = special_run(root, base, stamp, now, slist, sp_ids - PAY, log)
-    except Exception as e:
-        log('특가 검사 못 함(이번 실행은 건너뜀): %s' % str(e)[:200])
+    except Exception as e:   # 검사 자체를 못 하면 기록만 — FAIL_ALERT번째로 이어질 때부터 메일(조용히 멈추지 않게)
+        spp = os.path.join(root, 'state', 'specials.json')
+        sst = load(spp, None) or {}
+        n = int((sst.get('fail') or {}).get('n', 0)) + 1
+        sst['fail'] = {'n': n, 'last': stamp, 'why': str(e)[:200]}
+        save(spp, sst)
+        rc = 1 if n >= FAIL_ALERT else 0
+        log('특가 검사 못 함 %d번째 연속%s: %s' % (n, ' → 메일' if rc else '', str(e)[:200]))
+        if rc:
+            print('::error title=특가 검사 못 함::%d번 연속 — %s' % (n, str(e)[:200]))
     if rc:
         log('특가 경보로 실패로 끝냄(GitHub 메일)')
         print('기록:', push_now(root, '감시 %s · 특가 경보' % now.strftime('%Y-%m-%d_%H%M')))
