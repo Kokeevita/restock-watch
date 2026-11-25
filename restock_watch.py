@@ -18,6 +18,9 @@
   docs/restock.json    스킨이 읽는 결과 — 지금 살 수 있는 재입고만, 최신순
   state/soldout.json   품절 시각 — 상품마다 '판매 → 품절'로 바뀐 때(감시 전부터 품절이던 상품은 before = 날짜 모름)
   docs/soldout.json    스킨이 읽는 품절 날짜 — 지금 품절인 상품만. items(날짜 아는 것, 최신순) + before(날짜 모름)
+  state/ended.json     단종 시각(11/25) — 상품마다 단종 분류(183)에 들어온 때. 감시 전부터 단종이던 상품은 관리자 '상품 최종 수정일'로
+                       한 번 채운 날짜(seed). 채운 날짜가 없으면 before = 날짜 모름
+  docs/ended.json      스킨이 읽는 단종 날짜 — 지금 단종인 상품만. items(날짜 아는 것, 최신순) + before(날짜 모름). 모양은 soldout.json과 같다
   docs/shipfee.json    스킨이 읽는 배송비 예외 — 목록 카드 '배송비' 글이 가장 흔한 값(common, 몰 기본)과 다른 상품만 {상품번호: 글}.
                        휴대폰 카드는 배송비 칸이 없어 무료배송 표시를 이것으로 판단한다(11/13). 상태 파일에는 넣지 않는다
   state/skip.json      목록을 못 읽어 버린 실행이 몇 번 이어졌는지(정상 실행에서 지운다). 한두 번은 정상으로 끝내 기록만 남기고,
@@ -484,6 +487,7 @@ def main():
     sp, hp, op, lp = (os.path.join(root, 'state', 'snapshot.json'), os.path.join(root, 'state', 'history.json'),
                       os.path.join(root, 'docs', 'restock.json'), os.path.join(root, 'state', 'log.txt'))
     qp, qo = os.path.join(root, 'state', 'soldout.json'), os.path.join(root, 'docs', 'soldout.json')
+    ep, eo = os.path.join(root, 'state', 'ended.json'), os.path.join(root, 'docs', 'ended.json')
     fo = os.path.join(root, 'docs', 'shipfee.json')
     t0 = time.time()
     now = datetime.datetime.fromisoformat(arg('--now')) if arg('--now') else datetime.datetime.now(KST)   # --now: 시험용
@@ -621,11 +625,35 @@ def main():
     q_items = sorted(({'p': no, 't': since[str(no)]} for no in sold_now if since[str(no)] != 'before'), key=lambda x: (x['t'], x['p']), reverse=True)
     q_before = sorted((no for no in sold_now if since[str(no)] == 'before'), reverse=True)
 
+    # 5-2) 단종 시각(11/25 사용자 "단종 화면도 품절처럼 날짜별로"): 상품 단위로 단종 분류(183)에 들어온 때를 적는다. 규칙은 품절과 같다
+    #    감시 전부터 단종이던 상품은 처음 한 번 관리자 '상품 최종 수정일'로 채워 두었다(state/ended.json seed — 11/25 주문 기록과 대조해
+    #    수정일 뒤에 팔린 단종 상품이 없었다). 채운 날짜가 없으면 'before'. 단종이 아니게 되면(판매·품절) 지우고, 목록에서 잠깐 빠지면 그대로 둔다
+    se = load(ep, None)
+    if not isinstance(se, dict) or not isinstance(se.get('since'), dict):
+        se = {'start': (prev or {}).get('taken') or stamp, 'since': {}}
+    esince, new_e = se['since'], 0
+    for no, c in cur.items():
+        k = str(no)
+        if c['s'] != '단종':
+            esince.pop(k, None)
+        elif k not in esince:
+            p = pprods.get(no)
+            if not prev or (p and p['s'] == '단종'):
+                esince[k] = 'before'   # 첫 실행이거나, 지난번에도 단종인데 기록이 없으면 날짜를 모르는 것으로
+            else:
+                esince[k] = stamp      # 지난번 판매·품절(또는 새로 보인 상품) → 이번에 단종
+                new_e += 1
+    ended_now = [no for no, c in cur.items() if c['s'] == '단종']
+    e_items = sorted(({'p': no, 't': esince[str(no)]} for no in ended_now if esince[str(no)] != 'before'), key=lambda x: (x['t'], x['p']), reverse=True)
+    e_before = sorted((no for no in ended_now if esince[str(no)] == 'before'), reverse=True)
+
     save(sp, {'taken': stamp, 'base': base, 'opt_slot': done_slot, 'products': {str(k): v for k, v in sorted(cur.items())}})
     save(hp, hist)
     save(op, {'updated': stamp, 'badge_days': BADGE_DAYS, 'keep_days': KEEP_DAYS, 'items': items})
     save(qp, sq)
     save(qo, {'updated': stamp, 'start': sq['start'], 'items': q_items, 'before': q_before})
+    save(ep, se)
+    save(eo, {'updated': stamp, 'start': se['start'], 'items': e_items, 'before': e_before})
     # 6) 배송비 예외(11/13): 가장 흔한 글(몰 기본)과 다른 상품만. 단종 · 개인결제창은 뺀다. 글이 하나도 없으면(항목을 끄면) 빈 목록
     sell = [no for no, c in cur.items() if c['s'] != '단종' and fees.get(no)]
     common = collections.Counter(fees[no] for no in sell).most_common(1)[0][0] if sell else ''
@@ -637,10 +665,10 @@ def main():
     s = sum(1 for v in cur.values() if v['s'] == '판매')
     q = sum(1 for v in cur.values() if v['s'] == '품절')
     d = sum(1 for v in cur.values() if v['s'] == '단종')
-    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · 새 품절 %d(날짜 앎 %d·모름 %d) · 배송비 예외 %d · %.1f분%s%s' % (
+    log('%s상품 %d(판매 %d·품절 %d·단종 %d) · 상세 %d/%d%s%s · 새 재입고 %d · 결과 %d · 새 품절 %d(날짜 앎 %d·모름 %d) · 새 단종 %d(날짜 앎 %d·모름 %d) · 배송비 예외 %d · %.1f분%s%s' % (
         '' if prev else '기준점 · ', len(cur), s, q, d, len(fresh), len(targets), (' (못 읽음 %d)' % failed) if failed else '',
         (' (옵션 전체 %s시 칸)' % slot[-2:]) if full and slot else '', len(events), len(items),
-        new_q, len(q_items), len(q_before), len(ship_items), (time.time() - t0) / 60,
+        new_q, len(q_items), len(q_before), new_e, len(e_items), len(e_before), len(ship_items), (time.time() - t0) / 60,
         (' · 앞서 버림 %d번 뒤 정상' % int(skipped.get('n', 0))) if skipped else '', (' · 최신 기록 %s에서 시작' % synced) if synced else ''))
     for e in events:
         print('  재입고', e['p'], e['n'][:30], ('옵션: ' + ', '.join(e['o'])) if e['o'] else '')

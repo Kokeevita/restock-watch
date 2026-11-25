@@ -16,6 +16,8 @@
 | `docs/restock.json` | 스킨이 읽는 결과. 지금 살 수 있는 재입고만, 최신순 |
 | `state/soldout.json` | 품절 시각. 상품마다 '판매 → 품절'이 된 때, 감시 전부터 품절이면 `before` |
 | `docs/soldout.json` | 스킨(품절 상품 화면)이 읽는 품절 날짜. 지금 품절인 상품만 |
+| `state/ended.json` | 단종 시각(11/25). 상품마다 단종 분류(183)에 들어온 때. 감시 전부터 단종이던 109개는 관리자 '상품 최종 수정일'로 한 번 채움(`seed`), 날짜가 없으면 `before` |
+| `docs/ended.json` | 스킨(단종 상품 화면)이 읽는 단종 날짜. 지금 단종인 상품만, 모양은 `soldout.json`과 같다 |
 | `docs/shipfee.json` | 스킨(휴대폰 카드 무료배송 표시)이 읽는 배송비 예외. PC 목록 카드의 '배송비' 글이 가장 흔한 값(`common`)과 다른 상품만 `{상품번호: 글}`(11/13) |
 | `state/skip.json` | 목록을 못 읽어 버린 실행이 몇 번 이어졌는지. 정상 실행에서 지운다(11/14) |
 | `state/specials.json` | 특가 검사(11/24): 품목마다 지난번 판매가 · 최종가(`base`), 이어지는 경보(`alerts` — 처음 · 마지막 메일 시각) |
@@ -26,6 +28,8 @@
 `https://raw.githubusercontent.com/Kokeevita/restock-watch/main/docs/restock.json` — 누구나 읽을 수 있고, 바뀐 내용은 5분 안에 반영된다.
 
 품절 날짜: `https://raw.githubusercontent.com/Kokeevita/restock-watch/main/docs/soldout.json`
+
+단종 날짜: `https://raw.githubusercontent.com/Kokeevita/restock-watch/main/docs/ended.json`
 
 배송비 예외: `https://raw.githubusercontent.com/Kokeevita/restock-watch/main/docs/shipfee.json` — 휴대폰 카드 틀은 판매가 · 할인판매가 두 칸만 받아 배송비를 몰라, 개별 배송비 상품(예: 4,000원)에 무료배송이 잘못 붙지 않게 이것으로 본다. 카페24 상품정보 표시설정의 PC 상품목록 '배송비' 항목을 끄면 빈 목록이 된다
 
